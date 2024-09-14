@@ -15,12 +15,16 @@ pp = pprint.PrettyPrinter(indent=2)
 cs = CoreScanner()
 
 # Configuration
-GROCY_API = 'DOPLN_GROCY_API'
+GROCY_API = 'DOPLN_GROCY_API_KEY'
 ADD_ID = '11'
+INFO_ID = '22'
 BASE_URL = 'http://docker.lan:9192/api'
-ADD = 0
+MODE = 0
+
 ha_url = 'http://ha.lan:8123/api/services/tts/google_cloud_say'
-ha_token = 'DOPLN_HA_TOKEN'
+ha_token = 'DOPLN_HA_LONGTERM_KEY'
+media_player = 'media_player.nestmini3527'
+
 
 # Open Food Facts API initialization
 api = openfoodfacts.API(user_agent="ZebraGrocy/1.0")
@@ -40,26 +44,47 @@ def on_scanner_removed(scanner):
     print("Scanner removed")
     scanner.release_trigger()
 
-# Function to handle barcode scans
+# Modifikace handleru čárových kódů
 def handle_barcode_scan(barcode):
-    global ADD, last_scan_time
+    global MODE, last_scan_time, ADD_ID, INFO_ID
     print(f"Scanned: {barcode}")
-    # Update the last scan time
+    # Aktualizace času posledního skenu
     last_scan_time = time.time()
-    if barcode == ADD_ID and ADD == 0:
-        ADD = 1
+
+    if barcode == ADD_ID and MODE == 0:
+        MODE = 1
         print("Entering ADD mode")
         if ha_token:
             ha_call("Režim nákupu")
-    elif barcode == ADD_ID and ADD == 1:
-        ADD = 0
+    elif barcode == ADD_ID and (MODE == 1 or MODE == 2):
+        MODE = 0
         print("Entering CONSUME mode")
         if ha_token:
             ha_call("Režim spotřeby")
-    elif ADD == 1 and barcode != ADD_ID:
+    elif barcode == INFO_ID:
+        MODE = 2
+        print("Entering INFO mode. Scan the product to check its inventory.")
+        if ha_token:
+            ha_call("Režim zjištění zásob, naskenujte produkt.")
+    elif MODE == 2:
+        check_inventory(barcode)
+        MODE = 0  # Reset INFO_MODE after checking inventory
+    elif MODE == 1 and barcode != ADD_ID:
         increase_inventory(barcode)
-    elif ADD == 0 and barcode != ADD_ID:
+    elif MODE == 0 and barcode != ADD_ID:
         decrease_inventory(barcode)
+
+# Funkce pro kontrolu zásob produktu
+def check_inventory(upc):
+    global response_code, stock_amount
+    if product_id_lookup(upc):
+        print(f"{product_name} has {stock_amount} in stock.")
+        if ha_token:
+            ha_call(f"{product_name}, skladem máte {stock_amount}")
+    else:
+        print(f"Produkt s čárovým kódem {upc} nebyl nalezen v Grocy")
+        if ha_token:
+            ha_call(f"Produkt s čárovým kódem {upc} nebyl nalezen v Grocy")
 
 # Function to increase inventory
 def increase_inventory(upc):
@@ -70,7 +95,7 @@ def increase_inventory(upc):
         data = {'amount': purchase_amount, 'transaction_type': 'purchase'}
         grocy_api_call_post(url, data)
         if response_code == 200 and ha_token:
-            ha_call(f"{product_name} navýšen o {purchase_amount} na {stock_amoun                                                                                                                                                             t+purchase_amount}")
+            ha_call(f"{product_name} navýšen o {purchase_amount}")
         else:
             print(f"Failed to increase the value of {product_name}")
     else:
@@ -84,15 +109,15 @@ def decrease_inventory(upc):
         if stock_amount > 0:
             print(f"Decreasing {product_name} by 1")
             url = f"{BASE_URL}/stock/products/{product_id}/consume"
-            data = {'amount': 1, 'transaction_type': 'consume', 'spoiled': 'fals                                                                                                                                                             e'}
+            data = {'amount': 1, 'transaction_type': 'consume', 'spoiled': 'false'}
             grocy_api_call_post(url, data)
             if response_code == 400:
                 print(f"Failed to decrease the value of {product_name}")
                 ha_call(f"Failed to decrease {product_name}")
             if ha_token and response_code == 200:
-                ha_call(f"Spotřebováno {product_name}. Zbývá {stock_amount-1}")
+                ha_call(f"Spotřebováno {product_name}. Zbývá {stock_amount - 1}")
         elif stock_amount == 0:
-            print(f"The current stock for {product_name} is 0, nothing to decrea                                                                                                                                                             se")
+            print(f"The current stock for {product_name} is 0, nothing to decrease")
             if ha_token:
                 ha_call(f"Nemáte {product_name}, nelze odebrat")
     else:
@@ -111,11 +136,11 @@ def off_product_lookup(upc):
                 if ha_token:
                     ha_call(f"Nalezeno na Open Food Facts jako {product_name}")
                 # Add product to Grocy system if found in Open Food Facts
-                add_to_system(upc, product_name, "Automatically added from Open                                                                                                                                                              Food Facts")
+                add_to_system(upc, product_name, "Automatically added from Open Food Facts")
             else:
                 print(f"Broken Open Food Facts record")
                 if ha_token:
-                    ha_call(f"Poškozený záznam na Open Food Facts, přidej ručně"                                                                                                                                                             )
+                    ha_call(f"Poškozený záznam na Open Food Facts, přidej ručně")
         else:
             print(f"Not found in Open Food Facts for UPC: {upc}")
             if ha_token:
@@ -166,7 +191,7 @@ def add_barcode_to_product(upc, product_id):
 
 # Lookup the product ID by UPC (only in Grocy)
 def product_id_lookup(upc):
-    global product_id, purchase_amount, product_name, stock_amount, response_cod                                                                                                                                                             e
+    global product_id, purchase_amount, product_name, stock_amount, response_code
     print("Looking up the product in Grocy")
     url = f"{BASE_URL}/stock/products/by-barcode/{upc}"
     headers = {'cache-control': "no-cache", 'GROCY-API-KEY': GROCY_API}
@@ -205,14 +230,14 @@ def grocy_api_call_post(url, data):
         response_code = 500  # Internal error code in case of exception
         return None
 
-# Function to call Home Assistant
+# Modify the ha_call function to use declined message
 def ha_call(message_text):
     headers = {
         'Authorization': f'Bearer {ha_token}',
         'Content-Type': 'application/json'
     }
     data = {
-        "entity_id": "media_player.nestmini3527",
+        "entity_id": media_player,
         "message": message_text,
     }
     r = requests.post(url=ha_url, json=data, headers=headers)
@@ -227,10 +252,10 @@ last_scan_time = time.time()
 # Keep the program running and handle barcode scans
 while True:
     # Reset ADD mode if 5 minutes have passed since the last scan
-    if time.time() - last_scan_time > 300 and ADD != 0:
-        ADD = 0
-        print("Reverting ADD mode to 0 due to timeout")
+    if time.time() - last_scan_time > 300 and MODE != 0:
+        MODE = 0
+        print("Reverting MODE to 0 due to timeout")
         if ha_token:
-            ha_call("Režim nákupu byl resetován")
+            ha_call("Vypršel časový limit, nastavuji režim spotřeby.")
 
     time.sleep(0.10)

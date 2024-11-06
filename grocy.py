@@ -206,7 +206,7 @@ def product_id_lookup(upc):
             product_id = j['product']['id']
             product_name = j['product']['name']
             stock_amount = j['stock_amount']
-            purchase_amount = j['product'].get('qu_factor_purchase_to_stock', 1)
+            purchase_amount = j['qu_conversion_factor_purchase_to_stock']
             print(f"Our product is {product_id}")
             return True
     except requests.RequestException as e:

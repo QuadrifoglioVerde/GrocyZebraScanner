@@ -29,6 +29,13 @@ media_player = 'media_player.nestmini3527'
 # Open Food Facts API initialization
 api = openfoodfacts.API(user_agent="ZebraGrocy/1.0")
 
+def signal_handler(sig, frame):
+    print("Ukončuji program...")
+    sys.exit(0)
+
+signal.signal(signal.SIGINT, signal_handler)
+signal.signal(signal.SIGTERM, signal_handler)
+
 # Event handler when a new scanner is added
 @cs.on_scanner_added
 def on_scanner_added(scanner):
@@ -40,6 +47,7 @@ def on_scanner_added(scanner):
             handle_barcode_scan(barcode.code)
 
 # Event handler when a scanner is removed
+@cs.on_scanner_removed
 def on_scanner_removed(scanner):
     print("Scanner removed")
     scanner.release_trigger()
@@ -95,7 +103,7 @@ def increase_inventory(upc):
         data = {'amount': purchase_amount, 'transaction_type': 'purchase'}
         grocy_api_call_post(url, data)
         if response_code == 200 and ha_token:
-            ha_call(f"{product_name} navýšen o {purchase_amount}")
+            ha_call(f"{product_name} navýšen o {purchase_amount} na {stock_amount + purchase_amount}")
         else:
             print(f"Failed to increase the value of {product_name}")
     else:
@@ -104,12 +112,12 @@ def increase_inventory(upc):
 
 # Function to decrease inventory
 def decrease_inventory(upc):
-    global response_code, stock_amount
+    global response_code, stock_amount, quick_consume_amount
     if product_id_lookup(upc):
         if stock_amount > 0:
             print(f"Decreasing {product_name} by 1")
             url = f"{BASE_URL}/stock/products/{product_id}/consume"
-            data = {'amount': 1, 'transaction_type': 'consume', 'spoiled': 'false'}
+            data = {'amount': quick_consume_amount, 'transaction_type': 'consume', 'spoiled': 'false'}
             grocy_api_call_post(url, data)
             if response_code == 400:
                 print(f"Failed to decrease the value of {product_name}")
@@ -191,7 +199,7 @@ def add_barcode_to_product(upc, product_id):
 
 # Lookup the product ID by UPC (only in Grocy)
 def product_id_lookup(upc):
-    global product_id, purchase_amount, product_name, stock_amount, response_code
+    global product_id, purchase_amount, product_name, stock_amount, response_code, quick_consume_amount
     print("Looking up the product in Grocy")
     url = f"{BASE_URL}/stock/products/by-barcode/{upc}"
     headers = {'cache-control': "no-cache", 'GROCY-API-KEY': GROCY_API}
@@ -207,6 +215,7 @@ def product_id_lookup(upc):
             product_name = j['product']['name']
             stock_amount = j['stock_amount']
             purchase_amount = j['qu_conversion_factor_purchase_to_stock']
+            quick_consume_amount = j['product']['quick_consume_amount']
             print(f"Our product is {product_id}")
             return True
     except requests.RequestException as e:
